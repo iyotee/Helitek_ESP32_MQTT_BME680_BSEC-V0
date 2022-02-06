@@ -4,11 +4,11 @@
 //  CREATED ON  : 03.02.2022                  //
 //  VERSION     : 1.0.8                       //                                      
 //  DESCRIPTION : BME680 bsec data over MQTT  //
-//  LICENCE : GNU                             //
+//  LICENCE : A DETERMINER                    //
 //                                            //
 ////////////////////////////////////////////////
 
-#include <Arduino.h>                        //Arduino library
+#include <Arduino.h>                        // Arduino library
 #include <WiFi.h>                           // WiFi library
 extern "C" {                                // for the bsec_init() function
   #include "freertos/FreeRTOS.h"            // for the FreeRTOS API
@@ -23,8 +23,7 @@ extern "C" {                                // for the bsec_init() function
 #include <ArduinoOTA.h>
 #include <ESPmDNS.h>
 
-
-
+//Wifi credentials
 #define WIFI_SSID "SwissLabsBox2"  // WiFi SSID
 #define WIFI_PASS "JP3YMhAdx4rbvyru3S"  // WPA2 password
 
@@ -78,9 +77,12 @@ extern "C" {                                // for the bsec_init() function
 #define RAW_HUM_TOPIC "helitek/sensor/raw_humidity/raw_humidity"
 #define RAW_HUM_STATE_TOPIC "helitek/sensor/raw_humidity/state"
 
+//Compensated gas resistance MQTT topics
+#define COMP_GAS_TOPIC "helitek/sensor/compensated/gas"
+#define COMP_GAS_STATE_TOPIC "helitek/sensor/compensated/gas/state"
+
 // BULTIN LED PIN
 #define LED_BUILTIN 2
-
 
 //Helpers functions declaration
 void checkIaqSensorStatus(void);
@@ -97,7 +99,6 @@ String output;
 #define BME680_I2C_SPEED 400000 // I2C speed
 #define BME680_I2C_TIMEOUT 1000 // I2C timeout
 
-
 //BME680 sensor calibration data
 #define BME680_CAL_DATA_SIZE 32 // Calibration data size
 
@@ -109,9 +110,9 @@ TimerHandle_t wifiReconnectTimer; // Wifi reconnect timer
 // Some variables
 unsigned long previousMillis = 0; // will store last time temperature was updated
 const long interval = 3000; // interval at which to publish a temperature reading (in ms)
-const float temperatureOffset = 3.00; // temperature offset for calibration purposes (in °C) 
+const float temperatureOffset = 0.00; // temperature offset for calibration purposes (in °C) (for example, if you have the sensor inside an enclosure) BUT : this sensor calibrating over time, so i do not really recommand to touch this value. It takes about 12 hours to calibrate correctly
 
-
+// Function to connect to the wifi ( Wifi Begin )
 void connectToWifi() {
   // Connect to WiFi access point.
   // If you want to connect to a network with an existing name, try
@@ -141,6 +142,7 @@ void connectToOTA(){
   Serial.println("OTA ready");
 }
 
+// Function to connect to the MQTT broker ( for ex: Mosquitto )
 void connectToMqtt(){
   Serial.println("Connecting to MQTT...");
   while (!mqttClient.connected()) {
@@ -151,20 +153,21 @@ void connectToMqtt(){
 
 }
 
-void WifiEvent(WiFiEvent_t  event){
-  Serial.printf("[WiFi-event] event: %d\n", event);
-  switch(event){
-    case SYSTEM_EVENT_STA_GOT_IP:
-      Serial.println("WiFi connected");
-      Serial.println("IP address: ");
-      Serial.println(WiFi.localIP());
-      connectToMqtt();
-      break;
-    case SYSTEM_EVENT_STA_DISCONNECTED:
-      Serial.println("WiFi lost connection");
+
+void WifiEvent(WiFiEvent_t  event){ // Wifi event handler
+  Serial.printf("[WiFi-event] event: %d\n", event); // Print event
+  switch(event){ // Switch on event
+    case SYSTEM_EVENT_STA_GOT_IP: // If event is got ip ( wifi connected ) 
+      Serial.println("WiFi connected"); // Print event
+      Serial.println("IP address: "); // Print event
+      Serial.println(WiFi.localIP()); // Print event
+      connectToMqtt(); // Connect to MQTT
+      break; // Break
+    case SYSTEM_EVENT_STA_DISCONNECTED: // If event is disconnect from STA mode
+      Serial.println("WiFi lost connection"); // Print event
       xTimerStop(mqttReconnectTimer, 0); // ensure we don't reconnect to MQTT while reconnecting to Wi-Fi
-      xTimerStart(wifiReconnectTimer, 0);
-      break;
+      xTimerStart(wifiReconnectTimer, 0); // Start wifi reconnect timer
+      break; // Break   
   }
 }
 
@@ -246,21 +249,14 @@ void setup() { // Setup function
   mqttClient.onDisconnect(onMqttDisconnect); // Register MQTT disconnect handler
   mqttClient.onPublish(onMqttPublish); // Register MQTT publish handler
   mqttClient.onSubscribe(onMqttSubscribe); // Register MQTT subscribe handler
-  mqttClient.onUnsubscribe(onMqttUnsubscribe); //
-
-  
-  
+  mqttClient.onUnsubscribe(onMqttUnsubscribe); // Register MQTT unsubscribe handler
   mqttClient.setServer(MQTT_HOST, MQTT_PORT); // Set MQTT server and port
   mqttClient.setCredentials(MQTT_USER, MQTT_PASS);  // Set MQTT credentials
-  
   connectToWifi(); // Connect to Wi-Fi
   connectToOTA(); // Connect to OTA server
-
   // Print the header
   output = "Timestamp [ms], raw temperature [°C], pressure [hPa], raw relative humidity [%], gas [Ohm], IAQ, IAQ accuracy, temperature [°C], relative humidity [%], Static IAQ, CO2 equivalent, breath VOC equivalent";
-  
 }
-
 void loop() {
   //Handle OTA
   ArduinoOTA.handle(); //OTA handling
@@ -278,12 +274,12 @@ void loop() {
     output += ", " + String(iaqSensor.staticIaq);
     output += ", " + String(iaqSensor.co2Equivalent);
     output += ", " + String(iaqSensor.breathVocEquivalent);
-  } else {
+    output += ", " + String(iaqSensor.compGasValue);
+    } else {
     checkIaqSensorStatus();
   }
     // Delay of 500ms to avoid flooding the serial port before MQTT connection is established
     delay(500); // Wait for 500ms before next reading
-
 
     //Publish an MQTT message on the topic temperature
     uint16_t packetIdPub1 = mqttClient.publish(TEMP_TOPIC, 1, true, String(iaqSensor.temperature - temperatureOffset).c_str());
@@ -340,9 +336,10 @@ void loop() {
     Serial.printf("Publish at QOS 1 on topic : %s, the packetId: %i\n", IAQ_STATIC_TOPIC, packetIdPub11);
     Serial.printf("Message: %.2f \n", iaqSensor.staticIaq);
 
-
-    
-    
+    // Compensated gas resistance MQTT topics -- Not sure if i wanna keep this  --
+    uint16_t packetIdPub12 = mqttClient.publish(COMP_GAS_TOPIC, 1, true, String(iaqSensor.compGasValue).c_str());
+    Serial.printf("Publish at QOS 1 on topic : %s, the packetId: %i\n", COMP_GAS_TOPIC, packetIdPub12);
+    Serial.printf("Message: %.2f \n", iaqSensor.compGasValue);
 
   }
 // Helper function definitions
