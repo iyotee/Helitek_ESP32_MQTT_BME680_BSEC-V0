@@ -153,7 +153,6 @@ void connectToMqtt(){
 
 }
 
-
 void WifiEvent(WiFiEvent_t  event){ // Wifi event handler
   Serial.printf("[WiFi-event] event: %d\n", event); // Print event
   switch(event){ // Switch on event
@@ -340,7 +339,6 @@ void loop() {
     uint16_t packetIdPub12 = mqttClient.publish(COMP_GAS_TOPIC, 1, true, String(iaqSensor.compGasValue).c_str());
     Serial.printf("Publish at QOS 1 on topic : %s, the packetId: %i\n", COMP_GAS_TOPIC, packetIdPub12);
     Serial.printf("Message: %.2f \n", iaqSensor.compGasValue);
-
   }
 // Helper function definitions
 void checkIaqSensorStatus(void)
